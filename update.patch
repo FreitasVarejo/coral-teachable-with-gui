@@ -1,0 +1,99 @@
+--- a/setup_env.sh
++++ b/setup_env.sh
+@@ -9,13 +9,23 @@
+ echo "==> [1/7] Atualizando índices APT…"
+ sudo apt update
+ 
+ echo "==> [2/7] Instalando pacotes de sistema base…"
+ BASE_PKGS=(
+   build-essential libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev
+   wget curl llvm libncurses5-dev libncursesw5-dev xz-utils tk-dev libffi-dev
+   liblzma-dev python3-openssl git
+-  gstreamer1.0-tools python3-gi
++  # GStreamer completo (captura IMX708 via libcamerasrc)
++  gstreamer1.0-tools gstreamer1.0-libcamera
++  gstreamer1.0-plugins-base gstreamer1.0-plugins-good
++  gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly
++  gstreamer1.0-libav
++  python3-gi
+   libatlas-base-dev
+   # Câmera do Pi (opcional; se quiser rodar com Python do sistema e backend picamera2)
+   python3-libcamera python3-picamera2
++  # Ponte V4L2 (device virtual /dev/video30)
++  v4l2loopback-dkms v4l2loopback-utils
+ )
+ sudo apt install -y "${BASE_PKGS[@]}"
+ 
+@@ -74,6 +84,54 @@
+     print("[CHECK] pycoral instalado via wheel direto.")
+ PY
+ 
+-echo "==> [7/7] Auto-check do Edge TPU no venv…"
++echo "==> [7/9] Auto-check do Edge TPU no venv…"
+ python - <<'PY'
+ try:
+     from pycoral.utils.edgetpu import get_runtime_version, list_edge_tpus
+     print("[CHECK] PyCoral Runtime:", get_runtime_version())
+     tpus = list_edge_tpus()
+     print("[CHECK] Edge TPUs detectados:", tpus)
+     if not tpus:
+         print("[WARN] Nenhum Edge TPU detectado. Conecte a USB TPU ou verifique cabos/energia.")
+ except Exception as e:
+     print("[ERROR] Falha usando pycoral no venv:", e)
+ PY
+ 
++echo "==> [8/9] Configurando loopback V4L2 (/dev/video30)…"
++sudo modprobe -r v4l2loopback || true
++sudo modprobe v4l2loopback devices=1 video_nr=30 card_label="rpicam" exclusive_caps=0 max_buffers=64
++if v4l2-ctl --all -d /dev/video30 | grep -q "Video Capture"; then
++  echo "[CHECK] /dev/video30 com Video Capture/Output OK."
++else
++  echo "[WARN] /dev/video30 não expõe Video Capture — recarregue o módulo com exclusive_caps=0."
++fi
++
++echo "==> [9/9] Ajustando fonte do app (.camera_source) e feeder…"
++# Força fonte OpenCV via V4L2 (sem pipelines GStreamer dentro do app)
++echo "v4l2:30" > "$PROJECT_DIR/.camera_source"
++
++mkdir -p "$PROJECT_DIR/scripts"
++cat > "$PROJECT_DIR/scripts/start_feeder.sh" <<'FEED'
++#!/usr/bin/env bash
++set -euo pipefail
++# Feeder: IMX708 (libcamera) -> /dev/video30 (v4l2loopback) em YUY2 1280x720@30
++gst-launch-1.0 -v \
++  libcamerasrc ! \
++  video/x-raw,width=1280,height=720,framerate=30/1,format=NV12 ! \
++  videoconvert ! video/x-raw,format=YUY2 ! \
++  v4l2sink device=/dev/video30 sync=false io-mode=mmap
++FEED
++chmod +x "$PROJECT_DIR/scripts/start_feeder.sh"
++
++cat <<'INFO'
++------------------------------------------------------------
++✅ Ambiente pronto!
++Pasta: '"$PROJECT_DIR"'
++Venv:  coral-3.9 (ativação automática por .python-version)
++
++1) Suba o feeder (deixe rodando em um terminal):
++   scripts/start_feeder.sh
++
++2) Rode o app (outro terminal):
++   python teachable.py --backend opencv --device 30 --keyboard \
++     --model models/mobilenet_v1_1.0_224_quant_embedding_extractor_edgetpu.tflite
++------------------------------------------------------------
++INFO
++
+ echo
+ echo "------------------------------------------------------------"
+-echo "✅ Ambiente pronto!"
+-echo "Pasta: $PROJECT_DIR"
+-echo "Venv:  $ENV_NAME (ativação automática por .python-version)"
+-echo
+-echo "Use OpenCV no venv (recomendado):"
+-echo "  python teachable.py --backend opencv --device 0 --keyboard --model models/mobilenet_v1_1.0_224_quant_embedding_extractor_edgetpu.tflite"
+-echo
+-echo "Quer Picamera2? (Python do SISTEMA):"
+-echo "  python3 teachable.py --backend picamera2 --model models/mobilenet_v1_1.0_224_quant_embedding_extractor_edgetpu.tflite"
+-echo "------------------------------------------------------------"
++echo "Dica: se quiser subir o feeder no boot, posso te dar um service systemd."
++echo "------------------------------------------------------------"

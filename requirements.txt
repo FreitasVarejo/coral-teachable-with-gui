@@ -1,0 +1,7 @@
+--extra-index-url https://google-coral.github.io/py-repo/
+
+numpy==1.26.4
+Pillow==10.4.0
+opencv-python-headless==4.10.0.84
+pycoral==2.0.0   # puxa automaticamente tflite-runtime==2.5.0.post1
+RPi.GPIO==0.7.1

@@ -174,7 +174,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument('--model', default='models/mobilenet_v1_1.0_224_quant_embedding_extractor_edgetpu.tflite')
     p.add_argument('--backend', default='picamera2', choices=['picamera2', 'opencv'])
-    p.add_argument('--device', type=int, default=0, help='Índice do device (OpenCV).')
+    p.add_argument('--device', default='0', help='Índice do device (V4L2) ou pipeline GStreamer (OpenCV).')
     p.add_argument('--res', default='640x480')
     p.add_argument('--keyboard', action='store_true', help='Usa UI de teclado.')
     p.add_argument('--method', default='knn', choices=['knn', 'imprinting', 'backprop'])
@@ -184,9 +184,38 @@ def main():
     p.add_argument('--led-active-low', action='store_true', help='LEDs ativo-baixo (inverte a lógica).')
     args = p.parse_args()
 
+    # Normaliza resolução
     w, h = map(int, args.res.lower().split('x'))
-    cam = make_camera(args.backend, size=(w, h), device=args.device if args.backend=='opencv' else None)
+
+    # Carrega .camera_source apenas para backend opencv
+    src_file = os.path.join(os.getcwd(), ".camera_source")
+    if args.backend == "opencv" and os.path.isfile(src_file):
+        with open(src_file) as f:
+            src = f.read().strip()
+        # Aceitamos somente v4l2:<indice_ou_caminho>
+        if src.startswith("v4l2:"):
+            args.device = src.split(":", 1)[1]
+        else:
+            raise ValueError(
+                f".camera_source inválido: '{src}'. "
+                "Use apenas 'v4l2:<indice_ou_caminho>', ex.: 'v4l2:30' ou 'v4l2:/dev/video30'. "
+                "Pipelines GStreamer (gst:...) não são suportadas aqui."
+            )
+
+    # Para backend opencv: aceitar somente índice (string dígito) ou caminho /dev/videoN
+    if args.backend == "opencv":
+        if isinstance(args.device, str) and args.device.isdigit():
+            norm_device = int(args.device)
+        else:
+            norm_device = args.device  # pode ser /dev/videoN ou int (se já veio convertido)
+        # Não converteremos pipelines; Camera vai validar
+    else:
+        norm_device = None  # Picamera2 ignora 'device'
+
+    cam = make_camera(args.backend, size=(w, h), device=norm_device)
+
     ui = UI_Keyboard() if args.keyboard else (UI_Raspberry(active_low=args.led_active_low) if _GPIO else UI_Keyboard())
+
     if (not args.keyboard) and (_GPIO is None):
         print("Aviso: RPi.GPIO indisponível — caindo para teclado. Instale RPi.GPIO==0.7.1 e entre no grupo 'gpio'.", file=sys.stderr)
     if args.testui:
